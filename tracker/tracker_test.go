@@ -38,6 +38,7 @@ func TestNewTracker_BasicUsage(t *testing.T) {
 	if _, ok := snap["bar"]; ok {
 		t.Errorf("expected bar to be absent after all Done, got %v", snap["bar"])
 	}
+
 }
 
 func TestNewTracker_Stop(t *testing.T) {

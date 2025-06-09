@@ -43,12 +43,14 @@ func NewTracker(reportInterval time.Duration) *Tracker {
 func (t *Tracker) Start(name string) {
 	val, _ := t.counters.LoadOrStore(name, &counter{})
 	val.(*counter).inc()
+	t.report()
 }
 
 func (t *Tracker) Done(name string) {
 	val, ok := t.counters.Load(name)
 	if ok {
 		val.(*counter).dec()
+		t.report()
 	}
 }
 
