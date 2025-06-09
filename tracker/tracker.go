@@ -163,6 +163,5 @@ func (t *Tracker) Stop() {
 		if len(snap) > 0 {
 			t.report(reportSummary, "")
 		}
-		close(t.Reports)
 	})
 }
