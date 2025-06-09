@@ -29,6 +29,7 @@ type Tracker struct {
 	interval time.Duration
 	stopCh   chan struct{}
 	Reports  chan string
+	stopOnce sync.Once // ensure Stop is called only once
 }
 
 type reportType int
@@ -60,7 +61,10 @@ func (t *Tracker) Done(name string) {
 	val, ok := t.counters.Load(name)
 	if ok {
 		val.(*counter).dec()
-		t.report(reportDone, name)
+		// Only report done if count is non-negative
+		if val.(*counter).get() >= 0 {
+			t.report(reportDone, name)
+		}
 	}
 }
 
@@ -80,11 +84,20 @@ func (t *Tracker) Snapshot() map[string]int32 {
 func (t *Tracker) monitor() {
 	ticker := time.NewTicker(t.interval)
 	defer ticker.Stop()
+	emptyReported := false
 
 	for {
 		select {
 		case <-ticker.C:
 			t.report(reportSummary, "")
+			snap := t.Snapshot()
+			if len(snap) == 0 {
+				if !emptyReported {
+					emptyReported = true
+					t.Stop()
+				}
+				return
+			}
 		case <-t.stopCh:
 			return
 		}
@@ -98,17 +111,18 @@ func (t *Tracker) report(rtype reportType, taskName string) {
 		total += count
 	}
 
+	// Removed timestamp from report output
 	var msg string
 	switch rtype {
 	case reportStart:
-		msg = fmt.Sprintf("[T=%d] ▶ %s", total, taskName) // ▶ for start
+		msg = fmt.Sprintf("[T=%d] ▶ %s", total, taskName)
 	case reportDone:
-		msg = fmt.Sprintf("[T=%d] ■ %s", total, taskName) // ■ for end
+		msg = fmt.Sprintf("[T=%d] ■ %s", total, taskName)
 	case reportSummary:
 		if len(snap) == 0 {
 			msg = "[T=0] ≡ (empty)"
 		} else {
-			msg = fmt.Sprintf("[T=%d] ≡", total) // ≡ for monitor
+			msg = fmt.Sprintf("[T=%d] ≡", total)
 			names := make([]string, 0, len(snap))
 			for name := range snap {
 				names = append(names, name)
@@ -127,24 +141,28 @@ func (t *Tracker) report(rtype reportType, taskName string) {
 }
 
 func (t *Tracker) Stop() {
-	close(t.stopCh)
-	// Enhanced: show remaining tracked tasks on stop, if any
-	snap := t.Snapshot()
-	if len(snap) > 0 {
-		names := make([]string, 0, len(snap))
-		for name := range snap {
-			names = append(names, name)
+	t.stopOnce.Do(func() {
+		close(t.stopCh)
+		snap := t.Snapshot()
+		if len(snap) > 0 {
+			names := make([]string, 0, len(snap))
+			for name := range snap {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			msg := "[STOP] Remaining tasks:"
+			for _, name := range names {
+				msg += fmt.Sprintf(" %s:%d", name, snap[name])
+			}
+			select {
+			case t.Reports <- msg:
+			default:
+			}
 		}
-		sort.Strings(names)
-		msg := "[STOP] Remaining tasks:"
-		for _, name := range names {
-			msg += fmt.Sprintf(" %s:%d", name, snap[name])
+		// Only report summary if not already empty
+		if len(snap) > 0 {
+			t.report(reportSummary, "")
 		}
-		select {
-		case t.Reports <- msg:
-		default:
-			// drop if buffer full
-		}
-	}
-	t.report(reportSummary, "")
+		close(t.Reports)
+	})
 }
