@@ -96,4 +96,5 @@ func (t *Tracker) report() {
 
 func (t *Tracker) Stop() {
 	close(t.stopCh)
+	t.report()
 }
