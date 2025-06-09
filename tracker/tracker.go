@@ -128,5 +128,23 @@ func (t *Tracker) report(rtype reportType, taskName string) {
 
 func (t *Tracker) Stop() {
 	close(t.stopCh)
+	// Enhanced: show remaining tracked tasks on stop, if any
+	snap := t.Snapshot()
+	if len(snap) > 0 {
+		names := make([]string, 0, len(snap))
+		for name := range snap {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		msg := "[STOP] Remaining tasks:"
+		for _, name := range names {
+			msg += fmt.Sprintf(" %s:%d", name, snap[name])
+		}
+		select {
+		case t.Reports <- msg:
+		default:
+			// drop if buffer full
+		}
+	}
 	t.report(reportSummary, "")
 }
