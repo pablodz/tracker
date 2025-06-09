@@ -19,13 +19,18 @@ func main() {
 		}(i)
 	}
 
-	// Additional goroutine type: "logger"
 	go func() {
 		tracker.Start("logger")
 		defer tracker.Done("logger")
 
 		for i := 0; i < 3; i++ {
 			time.Sleep(2 * time.Second)
+		}
+	}()
+
+	go func() {
+		for msg := range tracker.Reports {
+			println(msg)
 		}
 	}()
 

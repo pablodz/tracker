@@ -47,3 +47,33 @@ func TestNewTracker_Stop(t *testing.T) {
 	tr.Stop()
 	// Should not panic or deadlock
 }
+
+func TestTracker_ReportsChannel(t *testing.T) {
+	tr := NewTracker(10 * time.Millisecond)
+	defer tr.Stop()
+
+	tr.Start("foo")
+	tr.Start("bar")
+	tr.Done("foo")
+	tr.Done("bar")
+
+	timeout := time.After(200 * time.Millisecond)
+	got := []string{}
+loop:
+	for {
+		select {
+		case msg := <-tr.Reports:
+			got = append(got, msg)
+		case <-timeout:
+			break loop
+		}
+	}
+
+	if len(got) == 0 {
+		t.Error("expected some reports, got none")
+	}
+	// Optionally, print for manual inspection
+	for _, msg := range got {
+		t.Log(msg)
+	}
+}

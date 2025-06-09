@@ -2,7 +2,7 @@ package tracker
 
 import (
 	"fmt"
-	"runtime"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -28,13 +28,23 @@ type Tracker struct {
 	counters sync.Map
 	interval time.Duration
 	stopCh   chan struct{}
+	Reports  chan string
 }
+
+type reportType int
+
+const (
+	reportSummary reportType = iota
+	reportStart
+	reportDone
+)
 
 // NewTracker creates a new Tracker with a monitoring interval.
 func NewTracker(reportInterval time.Duration) *Tracker {
 	t := &Tracker{
 		interval: reportInterval,
 		stopCh:   make(chan struct{}),
+		Reports:  make(chan string, 100),
 	}
 	go t.monitor()
 	return t
@@ -43,14 +53,14 @@ func NewTracker(reportInterval time.Duration) *Tracker {
 func (t *Tracker) Start(name string) {
 	val, _ := t.counters.LoadOrStore(name, &counter{})
 	val.(*counter).inc()
-	t.report()
+	t.report(reportStart, name)
 }
 
 func (t *Tracker) Done(name string) {
 	val, ok := t.counters.Load(name)
 	if ok {
 		val.(*counter).dec()
-		t.report()
+		t.report(reportDone, name)
 	}
 }
 
@@ -74,27 +84,49 @@ func (t *Tracker) monitor() {
 	for {
 		select {
 		case <-ticker.C:
-			t.report()
+			t.report(reportSummary, "")
 		case <-t.stopCh:
 			return
 		}
 	}
 }
 
-func (t *Tracker) report() {
+func (t *Tracker) report(rtype reportType, taskName string) {
 	snap := t.Snapshot()
-	fmt.Printf("[tracker] Total: %d | ", runtime.NumGoroutine())
-	if len(snap) == 0 {
-		fmt.Printf("NO_GOROUTINES")
-	} else {
-		for name, count := range snap {
-			fmt.Printf("%s=%d ", name, count)
+	total := int32(0)
+	for _, count := range snap {
+		total += count
+	}
+
+	var msg string
+	switch rtype {
+	case reportStart:
+		msg = fmt.Sprintf("[T=%d] ▶ %s", total, taskName) // ▶ for start
+	case reportDone:
+		msg = fmt.Sprintf("[T=%d] ■ %s", total, taskName) // ■ for end
+	case reportSummary:
+		if len(snap) == 0 {
+			msg = "[T=0] ≡ (empty)"
+		} else {
+			msg = fmt.Sprintf("[T=%d] ≡", total) // ≡ for monitor
+			names := make([]string, 0, len(snap))
+			for name := range snap {
+				names = append(names, name)
+			}
+			sort.Strings(names)
+			for _, name := range names {
+				msg += fmt.Sprintf(" %s:%d", name, snap[name])
+			}
 		}
 	}
-	fmt.Println()
+	select {
+	case t.Reports <- msg:
+	default:
+		// drop if buffer full
+	}
 }
 
 func (t *Tracker) Stop() {
 	close(t.stopCh)
-	t.report()
+	t.report(reportSummary, "")
 }
