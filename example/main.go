@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"fmt"
 	"log"
 	"time"
 
@@ -8,28 +10,26 @@ import (
 )
 
 func main() {
-	tracker := tracker.NewTracker(1 * time.Second)
-	defer tracker.Stop()
+	t := tracker.NewTracker(context.TODO(), 100*time.Millisecond)
+	defer t.Stop()
 
 	for i := 0; i < 3; i++ {
 		go func(id int) {
-			tracker.Start("worker")
-			defer tracker.Done("worker")
+			t.Start(fmt.Sprintf("worker%d", id))
+			defer t.Done(fmt.Sprintf("worker%d", id))
 
 			time.Sleep(time.Duration(id+1) * time.Second)
 		}(i)
 	}
 
 	go func() {
-		tracker.Start("logger")
-		defer tracker.Done("logger")
+		t.Start("logger")
+		defer t.Done("logger")
 
-		for i := 0; i < 3; i++ {
-			time.Sleep(2 * time.Second)
-		}
+		time.Sleep(1 * time.Second)
 	}()
 
-	for msg := range tracker.Reports {
+	for msg := range t.Reports() {
 		println(msg)
 	}
 

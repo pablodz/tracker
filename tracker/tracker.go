@@ -1,167 +1,99 @@
 package tracker
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
-type counter struct {
-	value int32
-}
-
-func (c *counter) inc() {
-	atomic.AddInt32(&c.value, 1)
-}
-
-func (c *counter) dec() {
-	atomic.AddInt32(&c.value, -1)
-}
-
-func (c *counter) get() int32 {
-	return atomic.LoadInt32(&c.value)
-}
-
 type Tracker struct {
-	counters sync.Map
-	interval time.Duration
-	stopCh   chan struct{}
-	Reports  chan string
-	stopOnce sync.Once // ensure Stop is called only once
+	mu      sync.Mutex
+	running map[string]struct{}
+	reports chan string
+	cancel  context.CancelFunc
 }
 
-type reportType int
-
-const (
-	reportSummary reportType = iota
-	reportStart
-	reportDone
-)
-
-// NewTracker creates a new Tracker with a monitoring interval.
-func NewTracker(reportInterval time.Duration) *Tracker {
+func NewTracker(ctx context.Context, reportInterval time.Duration) *Tracker {
 	t := &Tracker{
-		interval: reportInterval,
-		stopCh:   make(chan struct{}),
-		Reports:  make(chan string, 100),
+		running: make(map[string]struct{}),
+		reports: make(chan string, 100),
 	}
-	go t.monitor()
+	ctx, cancel := context.WithCancel(ctx)
+	t.cancel = cancel
+	go func() {
+		ticker := time.NewTicker(reportInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				close(t.reports)
+				return
+			case <-ticker.C:
+				t.reportSummary()
+			}
+		}
+	}()
 	return t
 }
 
 func (t *Tracker) Start(name string) {
-	val, _ := t.counters.LoadOrStore(name, &counter{})
-	val.(*counter).inc()
-	t.report(reportStart, name)
+	t.mu.Lock()
+	t.running[name] = struct{}{}
+	t.mu.Unlock()
+	t.report("▶", name)
 }
 
 func (t *Tracker) Done(name string) {
-	val, ok := t.counters.Load(name)
-	if ok {
-		val.(*counter).dec()
-		// Only report done if count is non-negative
-		if val.(*counter).get() >= 0 {
-			t.report(reportDone, name)
-		}
-	}
+	t.mu.Lock()
+	delete(t.running, name)
+	t.mu.Unlock()
+	t.report("■", name)
 }
 
-func (t *Tracker) Snapshot() map[string]int32 {
-	snapshot := make(map[string]int32)
-	t.counters.Range(func(key, value any) bool {
-		name := key.(string)
-		cnt := value.(*counter).get()
-		if cnt > 0 {
-			snapshot[name] = cnt
-		}
-		return true
-	})
-	return snapshot
-}
-
-func (t *Tracker) monitor() {
-	ticker := time.NewTicker(t.interval)
-	defer ticker.Stop()
-	emptyReported := false
-
-	for {
-		select {
-		case <-ticker.C:
-			t.report(reportSummary, "")
-			snap := t.Snapshot()
-			if len(snap) == 0 {
-				if !emptyReported {
-					emptyReported = true
-					t.Stop()
-				}
-				return
-			}
-		case <-t.stopCh:
-			return
-		}
-	}
-}
-
-func (t *Tracker) report(rtype reportType, taskName string) {
-	snap := t.Snapshot()
-	total := int32(0)
-	for _, count := range snap {
-		total += count
-	}
-
-	// Removed timestamp from report output
-	var msg string
-	switch rtype {
-	case reportStart:
-		msg = fmt.Sprintf("[T=%d] ▶ %s", total, taskName)
-	case reportDone:
-		msg = fmt.Sprintf("[T=%d] ■ %s", total, taskName)
-	case reportSummary:
-		if len(snap) == 0 {
-			msg = "[T=0] ≡ (empty)"
-		} else {
-			msg = fmt.Sprintf("[T=%d] ≡", total)
-			names := make([]string, 0, len(snap))
-			for name := range snap {
-				names = append(names, name)
-			}
-			sort.Strings(names)
-			for _, name := range names {
-				msg += fmt.Sprintf(" %s:%d", name, snap[name])
-			}
-		}
-	}
+func (t *Tracker) report(kind, name string) {
+	t.mu.Lock()
+	total := len(t.running)
+	t.mu.Unlock()
+	msg := fmt.Sprintf("[T=%d] %s %s", total, kind, name)
 	select {
-	case t.Reports <- msg:
+	case t.reports <- msg:
 	default:
-		// drop if buffer full
 	}
+}
+
+func (t *Tracker) reportSummary() {
+	t.mu.Lock()
+	total := len(t.running)
+	names := make([]string, 0, total)
+	for name := range t.running {
+		names = append(names, name)
+	}
+	t.mu.Unlock()
+	sort.Strings(names)
+	if total == 0 {
+		msg := "[T=0] No more goroutines. Stopping tracker."
+		select {
+		case t.reports <- msg:
+		default:
+		}
+		t.Stop()
+		return
+	}
+	msg := fmt.Sprintf("[T=%d] ≡ %v", total, names)
+	select {
+	case t.reports <- msg:
+	default:
+	}
+}
+
+func (t *Tracker) Reports() <-chan string {
+	return t.reports
 }
 
 func (t *Tracker) Stop() {
-	t.stopOnce.Do(func() {
-		close(t.stopCh)
-		snap := t.Snapshot()
-		if len(snap) > 0 {
-			names := make([]string, 0, len(snap))
-			for name := range snap {
-				names = append(names, name)
-			}
-			sort.Strings(names)
-			msg := "[STOP] Remaining tasks:"
-			for _, name := range names {
-				msg += fmt.Sprintf(" %s:%d", name, snap[name])
-			}
-			select {
-			case t.Reports <- msg:
-			default:
-			}
-		}
-		// Only report summary if not already empty
-		if len(snap) > 0 {
-			t.report(reportSummary, "")
-		}
-	})
+	if t.cancel != nil {
+		t.cancel()
+	}
 }
