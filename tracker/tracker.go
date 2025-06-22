@@ -13,12 +13,14 @@ type Tracker struct {
 	running map[string]struct{}
 	reports chan string
 	cancel  context.CancelFunc
+	done    chan struct{} // signal for shutdown
 }
 
 func NewTracker(ctx context.Context, reportInterval time.Duration) *Tracker {
 	t := &Tracker{
 		running: make(map[string]struct{}),
 		reports: make(chan string, 100),
+		done:    make(chan struct{}),
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	t.cancel = cancel
@@ -28,7 +30,8 @@ func NewTracker(ctx context.Context, reportInterval time.Duration) *Tracker {
 		for {
 			select {
 			case <-ctx.Done():
-				close(t.reports)
+				return
+			case <-t.done:
 				return
 			case <-ticker.C:
 				t.reportSummary()
@@ -93,6 +96,16 @@ func (t *Tracker) Reports() <-chan string {
 }
 
 func (t *Tracker) Stop() {
+	t.mu.Lock()
+	select {
+	case <-t.done:
+		t.mu.Unlock()
+		return // already stopped
+	default:
+		close(t.done)
+	}
+	close(t.reports)
+	t.mu.Unlock()
 	if t.cancel != nil {
 		t.cancel()
 	}
