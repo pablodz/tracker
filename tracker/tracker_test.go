@@ -102,3 +102,26 @@ func TestTracker_ManyGoroutinesNotClosed(t *testing.T) {
 		t.Fatal("expected some reports for unclosed tasks")
 	}
 }
+
+func TestStopBeforeAllDone(t *testing.T) {
+	ctx := context.Background()
+	tr := NewTracker(ctx, 10*time.Millisecond)
+
+	tr.Start("g1")
+	tr.Start("g2")
+	tr.Start("g3")
+
+	tr.Done("g1")
+
+	tr.Stop()
+
+	// These should not panic or deadlock
+	tr.Done("g2")
+	tr.Done("g3")
+	tr.Start("m3")
+
+	// Drain and print reports (optional)
+	for range tr.Reports() {
+		// drain
+	}
+}

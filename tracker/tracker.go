@@ -14,6 +14,7 @@ type Tracker struct {
 	reports chan string
 	cancel  context.CancelFunc
 	done    chan struct{} // signal for shutdown
+	once    sync.Once     // ensure Stop is only called once
 }
 
 func NewTracker(ctx context.Context, reportInterval time.Duration) *Tracker {
@@ -27,6 +28,7 @@ func NewTracker(ctx context.Context, reportInterval time.Duration) *Tracker {
 	go func() {
 		ticker := time.NewTicker(reportInterval)
 		defer ticker.Stop()
+		defer close(t.reports) // close reports channel when goroutine exits
 		for {
 			select {
 			case <-ctx.Done():
@@ -56,6 +58,9 @@ func (t *Tracker) Done(name string) {
 }
 
 func (t *Tracker) report(kind, name string) {
+	if t.isDone() {
+		return
+	}
 	t.mu.Lock()
 	total := len(t.running)
 	t.mu.Unlock()
@@ -67,6 +72,9 @@ func (t *Tracker) report(kind, name string) {
 }
 
 func (t *Tracker) reportSummary() {
+	if t.isDone() {
+		return
+	}
 	t.mu.Lock()
 	total := len(t.running)
 	names := make([]string, 0, total)
@@ -91,22 +99,32 @@ func (t *Tracker) reportSummary() {
 	}
 }
 
+func (t *Tracker) isDone() bool {
+	select {
+	case <-t.done:
+		return true
+	default:
+		return false
+	}
+}
+
 func (t *Tracker) Reports() <-chan string {
 	return t.reports
 }
 
 func (t *Tracker) Stop() {
-	t.mu.Lock()
-	select {
-	case <-t.done:
+	t.once.Do(func() {
+		t.mu.Lock()
+		select {
+		case <-t.done:
+			t.mu.Unlock()
+			return // already stopped
+		default:
+			close(t.done)
+		}
 		t.mu.Unlock()
-		return // already stopped
-	default:
-		close(t.done)
-	}
-	close(t.reports)
-	t.mu.Unlock()
-	if t.cancel != nil {
-		t.cancel()
-	}
+		if t.cancel != nil {
+			t.cancel()
+		}
+	})
 }
