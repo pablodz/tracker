@@ -20,7 +20,7 @@ type Tracker struct {
 func NewTracker(ctx context.Context, reportInterval time.Duration) *Tracker {
 	t := &Tracker{
 		running: make(map[string]struct{}),
-		reports: make(chan string, 100),
+		reports: make(chan string),
 		done:    make(chan struct{}),
 	}
 	ctx, cancel := context.WithCancel(ctx)
@@ -44,6 +44,9 @@ func NewTracker(ctx context.Context, reportInterval time.Duration) *Tracker {
 }
 
 func (t *Tracker) Start(name string) {
+	if t.isDone() {
+		return
+	}
 	t.mu.Lock()
 	t.running[name] = struct{}{}
 	t.mu.Unlock()
@@ -51,6 +54,9 @@ func (t *Tracker) Start(name string) {
 }
 
 func (t *Tracker) Done(name string) {
+	if t.isDone() {
+		return
+	}
 	t.mu.Lock()
 	delete(t.running, name)
 	t.mu.Unlock()
