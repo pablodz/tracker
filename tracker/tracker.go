@@ -67,11 +67,19 @@ func (t *Tracker) report(kind, name string) {
 	if t == nil || t.isDone() {
 		return
 	}
+	defer func() {
+		if r := recover(); r != nil {
+			// Channel closed, ignore send
+		}
+	}()
 	t.mu.Lock()
 	total := len(t.running)
 	t.mu.Unlock()
 	msg := fmt.Sprintf("[T=%d] %s %s", total, kind, name)
 	select {
+	case <-t.done:
+		// Tracker is done, don't send
+		return
 	case t.reports <- msg:
 	default:
 	}
