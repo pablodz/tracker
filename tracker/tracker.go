@@ -44,7 +44,7 @@ func NewTracker(ctx context.Context, reportInterval time.Duration) *Tracker {
 }
 
 func (t *Tracker) Start(name string) {
-	if t.isDone() {
+	if t == nil || t.isDone() {
 		return
 	}
 	t.mu.Lock()
@@ -54,7 +54,7 @@ func (t *Tracker) Start(name string) {
 }
 
 func (t *Tracker) Done(name string) {
-	if t.isDone() {
+	if t == nil || t.isDone() {
 		return
 	}
 	t.mu.Lock()
@@ -64,7 +64,7 @@ func (t *Tracker) Done(name string) {
 }
 
 func (t *Tracker) report(kind, name string) {
-	if t.isDone() {
+	if t == nil || t.isDone() {
 		return
 	}
 	t.mu.Lock()
@@ -78,7 +78,7 @@ func (t *Tracker) report(kind, name string) {
 }
 
 func (t *Tracker) reportSummary() {
-	if t.isDone() {
+	if t == nil || t.isDone() {
 		return
 	}
 	t.mu.Lock()
@@ -106,6 +106,9 @@ func (t *Tracker) reportSummary() {
 }
 
 func (t *Tracker) isDone() bool {
+	if t == nil {
+		return true
+	}
 	select {
 	case <-t.done:
 		return true
@@ -115,10 +118,16 @@ func (t *Tracker) isDone() bool {
 }
 
 func (t *Tracker) Reports() <-chan string {
+	if t == nil {
+		return nil
+	}
 	return t.reports
 }
 
 func (t *Tracker) Stop() {
+	if t == nil {
+		return
+	}
 	t.once.Do(func() {
 		t.mu.Lock()
 		select {
